@@ -28,6 +28,7 @@ penguins_clean<-penguins |>
          flip_l=flipper_length_mm)
 ```
 
+Takes penguins df, drops all the na rows, then renames body_mass_g, bill_length_mm, bill_depth_mm, and flipper_length_mm to mass, bill_l, bill_d, and flip_l, respectively. 
 
 ## Part 1: Set up models
 
@@ -49,15 +50,23 @@ R is able to recognize formulas if saved to the global environment. Take advanta
 #| eval: false
 
 #variable name
-f1   <-  dep_var~col_name_1+col_name_2+col_name_3
+f1 <-  mass ~ bill_l + bill_d + flip_l + species + sex + island
+f2 <- mass ~ bill_l + bill_d + flip_l + species + sex
+f3 <- mass ~ bill_d + flip_l + species + sex
 
-mdl<-lm(f1, data=df_where_column_names_come_frome)
+mdl1<-lm(f1, data=penguins_clean)
+mdl2<-lm(f2, data=penguins_clean)
+mdl3<-lm(f3, data=penguins_clean)
+
 ```
 
 
 
 ```{r}
 # Use this chunk and any extras to complete setting up the model
+summary(mdl1)
+summary(mdl2)
+summary(mdl3)
 ```
 
 
@@ -69,9 +78,10 @@ Use AIC to justify your model selection. What edits do you need to make in order
 ```{r}
 #| eval: false
 
-AIC(x,y,z)
+AIC(mdl1,mdl2,mdl3)
 ```
 
+Want to choose the lowest AIC
 
 ## Comparing models with Cross Validation
 
@@ -79,10 +89,20 @@ Now we're going to use 10-fold cross validation to help us select the models. Wr
 
 Pseudocode:
 
+How much training data (10 folds)
+split data into test and training 
+random sampling 
+what metric?
+  Root mean squared error 
+  Let's make a function for RMSE
+  
+for loop: 
+  Apply the model to each training set 
+  make prediction on the test set with fitted training model 
+close loop:
 
-
-
-
+summarize our RMSE
+Final model built on whole dataset
 
 
 ### Accuracy criteria
@@ -108,9 +128,14 @@ calc_rmse_2<-function(x,y){
   
   return(rmse)
 }
+
+a <- rnorm(10000)
+b <- rnorm(10000)
+
+calc_rmse(a,b)
+calc_rmse_2(a,b)
+
 ```
-
-
 
 
 
@@ -134,6 +159,8 @@ sample(ex,size=10)
 sample(ex,size=10,replace=TRUE)
 
 #Describe in words the replace argument.
+#Without replace = TRUE, you can only draw 5 times. replace = TRUE means that it replaces after each draw
+
 
 
 ```
@@ -142,7 +169,9 @@ Why is everybody getting different answers in the example sample? Is this a prob
 
 ```{r}
 #seed
+set.seed(42)
 
+sample(ex, size=10, replace=TRUE)
 
 ```
 
@@ -154,7 +183,8 @@ folds<-10
 
 fold_vec<-rep(1:folds,length.out=nrow(penguins_clean))
 
-penguins_fold<-penguins_clean |> #what goes here?
+penguins_fold<-penguins_clean |>
+  mutate(group = sample(fold_vec, size=n(), replace=FALSE))
   
 
 #check to make sure the fold groups are balanced
@@ -166,6 +196,10 @@ Create dataframes called `test_df` and `train_df` that split the penguins data i
 
 ```{r}
 # datasets here
+test_df <- penguins_fold %>%
+  filter(group == 1)
+train_df <- penguins_fold %>%
+  filter(group!= 1)
 ```
 
 
@@ -173,7 +207,13 @@ Now fit each model to the training set using the `lm()`. Name each model `traini
 
 ```{r}
 
+training_lm1 <- lm(f1, data=train_df)
+training_lm2 <- lm(f2, data=train_df)
+training_lm3 <- lm(f3, data=train_df)
 
+summary(training_lm1)
+summary(training_lm2)
+summary(training_lm3)
 
 ```
 
@@ -185,16 +225,20 @@ Now fit each model to the training set using the `lm()`. Name each model `traini
 
 ```{r}
 predict_test<-test_df |> 
-  mutate(model1 = predict(xxx,test_df),
-         model2 = predict(xxx,test_df),
-         model3 = predict(xxx,test_df))
+  mutate(model1 = predict(training_lm1,test_df),
+         model2 = predict(training_lm2,test_df),
+         model3 = predict(training_lm3,test_df))
 ```
 
 Calculate the RMSE of the first fold test predictions. Hint: Use summarize to condense the `predict_test` dataframe.
 
 ```{r}
 rmse_predict_test<-predict_test |> 
-  summarize(????)
+  summarize(
+    rmse_mdl1 = calc_rmse(mass, model1),
+    rmse_mdl2 = calc_rmse(mass, model2),
+    rmse_mdl3 = calc_rmse(mass, model3)
+  )
 ```
 
 What are the results just looking at the first fold?
@@ -211,14 +255,23 @@ rmse_vec<-vector(length=folds)  #Why?
 for( i in 1:folds){
 
   # separate into test and train
+  kfolds_test_df <- penguins_fold %>%
+  filter(group == i)
   
+  kfolds_train_df <- penguins_fold %>%
+  filter(group!= i)
   
   # Run for one model
-  
+  kfolds_training_lm1 <- lm(f1, data=kfolds_train_df)
+
   #Get the predictions from the model
-  
+  predict_test<-kfolds_test_df |> 
+  mutate(model1 = predict(kfolds_training_lm1, kfolds_test_df))
   # Summarize/calculate the rmse for that model
-  
+  kfold_rmse<-predict_test |> 
+  summarize(
+    rmse_md1 = calc_rmse(mass, model1)
+  )
   
   rmse_vec[i]<-kfold_rmse$rmse_md1
 }
@@ -233,7 +286,25 @@ Great we made a for loop for one model. Now we would have to do it again and aga
 ```{r}
 kfold_cv<-function(i,df,formula){
   
+  # split test and train
+  kfold_train_df <- df %>%
+    filter(group != i)
   
+  kfold_test_df <- df %>%
+    filter(group == i)
+  
+  # Run model 
+  kfold_lm <- lm(formula, data = kfold_train_df)
+  
+  # get prediction
+  kfold_pred_df <- kfold_test_df %>%
+    mutate(md = predict(kfold_lm, kfold_test_df))
+  
+  # calculate
+  kfold_rmse <- kfold_pred_df %>%
+    summarize(rmse_md=calc_rmse(md, mass))
+  
+  return(kfold_rmse$rmse_md)
   
 }
 ```
@@ -247,9 +318,10 @@ kfold_cv<-function(i,df,formula){
 Since we already defined the function that does CV for each model. We can use purrr to easily get all the results and store it in a dataframe.
 
 ```{r}
-rmse_df<-data.frame(j=1:folds) |> mutate(rmse_mdl1 = map_dbl(j, kfold_cv, df=penguins_fold,formula=f1),
-                                         rmse_mdl2=map_dbl(j,kfold_cv,df=penguins_fold,formula=f2),
-                                         rmse_mdl3=map_dbl(j,kfold_cv,df=penguins_fold,formula=f3))
+rmse_df<-data.frame(j=1:folds) |> 
+  mutate(rmse_mdl1 = map_dbl(j, kfold_cv, df=penguins_fold,formula=f1),
+         rmse_mdl2=map_dbl(j,kfold_cv,df=penguins_fold,formula=f2),
+         rmse_mdl3=map_dbl(j,kfold_cv,df=penguins_fold,formula=f3))
 
 rmse_means<-rmse_df |> 
   summarize(across(starts_with('rmse'),mean))
@@ -260,8 +332,10 @@ rmse_means<-rmse_df |>
 
 Between AIC and the RMSE scores of the Cross Validation, which model does the best job of predicting penguin bodymass?
 
+MODEL 2 is the best because it is the smallest 
 
 The final step is to run the selected model on all the data. Fit a final model and provide the summary table.
+
 
 
 Render your document, commit changes, and push to github.
